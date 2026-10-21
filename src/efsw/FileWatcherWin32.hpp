@@ -60,6 +60,9 @@ class FileWatcherWin32 : public FileWatcherImpl {
 	void removeAllWatches();
 	void drainRetiredWatches();
 
+	/// Frees a stopped watch, or keeps it until the completion of its read arrives.
+	void retireWatch( WatcherStructWin32* watch );
+
 	void removeWatch( WatcherStructWin32* watch );
 
   private:

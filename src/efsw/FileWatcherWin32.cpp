@@ -118,7 +118,15 @@ void FileWatcherWin32::removeWatch( WatcherStructWin32* watch ) {
 
 	StopWatch( watch );
 	mWatches.erase( watch );
-	mRetiredWatches.insert( watch );
+	retireWatch( watch );
+}
+
+void FileWatcherWin32::retireWatch( WatcherStructWin32* watch ) {
+	if ( watch->Watch->ReadPending ) {
+		mRetiredWatches.insert( watch );
+	} else {
+		DestroyWatch( watch );
+	}
 }
 
 void FileWatcherWin32::watch() {
@@ -135,7 +143,7 @@ void FileWatcherWin32::removeAllWatches() {
 
 	for ( ; iter != mWatches.end(); ++iter ) {
 		StopWatch( ( *iter ) );
-		mRetiredWatches.insert( *iter );
+		retireWatch( *iter );
 	}
 
 	mWatches.clear();
@@ -190,6 +198,14 @@ void FileWatcherWin32::run() {
 				} else if ( mWatches.find( (WatcherStructWin32*)ov ) != mWatches.end() ) {
 					WatchCallback( numOfBytes, ov );
 					FlushPendingMoves( ( (WatcherStructWin32*)ov )->Watch );
+
+					// A listener that removed the watch during the callback left it retired
+					// without a read in flight.
+					auto removed = mRetiredWatches.find( (WatcherStructWin32*)ov );
+					if ( removed != mRetiredWatches.end() && !( *removed )->Watch->ReadPending ) {
+						DestroyWatch( *removed );
+						mRetiredWatches.erase( removed );
+					}
 				}
 			} else if ( !res && GetLastError() == WAIT_TIMEOUT ) {
 				Lock lock( mWatchesLock );

@@ -286,6 +286,8 @@ void CALLBACK WatchCallback( DWORD dwNumberOfBytesTransfered, LPOVERLAPPED lpOve
 			FileSystem::dirRemoveSlashAtEnd( dir );
 			pWatch->Listener->handleMissedFileActions( pWatch->ID, dir );
 			RefreshWatch( tWatch );
+		} else if ( nullptr != pWatch ) {
+			pWatch->ReadPending = false;
 		}
 		return;
 	}
@@ -299,6 +301,8 @@ void CALLBACK WatchCallback( DWORD dwNumberOfBytesTransfered, LPOVERLAPPED lpOve
 
 	if ( !pWatch->StopNow ) {
 		RefreshWatch( tWatch );
+	} else {
+		pWatch->ReadPending = false;
 	}
 }
 
@@ -331,6 +335,9 @@ RefreshResult RefreshWatch( WatcherStructWin32* pWatch ) {
 		if ( bRet )
 			ret = RefreshResult::Success;
 	}
+
+	// A directory deleted while watched refuses new reads, no completion will come for it.
+	pWatch->Watch->ReadPending = bRet;
 
 	if ( !bRet ) {
 		std::string error = std::to_string( GetLastError() );

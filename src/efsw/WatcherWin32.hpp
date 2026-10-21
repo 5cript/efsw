@@ -74,6 +74,7 @@ class WatcherWin32 : public Watcher {
 		StopNow( false ),
 		Extended( false ),
 		ReportCrossDirectoryMoves( false ),
+		ReadPending( false ),
 		Watch( NULL ),
 		DirName( NULL ) {
 		Buffer.resize( dwBufferSize );
@@ -88,6 +89,8 @@ class WatcherWin32 : public Watcher {
 	bool StopNow;
 	bool Extended;
 	bool ReportCrossDirectoryMoves;
+	/// A ReadDirectoryChanges call is in flight, its completion must arrive before the watch is freed
+	bool ReadPending;
 	FileWatcherImpl* Watch;
 	char* DirName;
 	sLastModifiedEvent LastModifiedEvent;
