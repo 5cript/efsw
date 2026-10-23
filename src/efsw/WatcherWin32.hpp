@@ -53,7 +53,8 @@ void CALLBACK WatchCallback( DWORD dwNumberOfBytesTransfered, LPOVERLAPPED lpOve
 
 DWORD PendingMoveWaitTimeout( const WatcherWin32* pWatch );
 
-void FlushPendingMoves( WatcherWin32* pWatch );
+/// Reports the held deletions that waited for their addition long enough, or all of them.
+void FlushPendingMoves( WatcherWin32* pWatch, bool all = false );
 
 void StopWatch( WatcherStructWin32* pWatch );
 

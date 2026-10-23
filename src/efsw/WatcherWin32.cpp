@@ -250,12 +250,12 @@ DWORD PendingMoveWaitTimeout( const WatcherWin32* pWatch ) {
 	return timeout;
 }
 
-void FlushPendingMoves( WatcherWin32* pWatch ) {
+void FlushPendingMoves( WatcherWin32* pWatch, bool all ) {
 	const ULONGLONG now = GetTickCount64();
 
 	auto flush = [&]( std::vector<PendingRenameWin32>& pending ) {
 		for ( auto it = pending.begin(); it != pending.end(); ) {
-			if ( now - it->CreatedAt >= pendingMoveTimeoutMs ) {
+			if ( all || now - it->CreatedAt >= pendingMoveTimeoutMs ) {
 				pWatch->Watch->handleAction( pWatch, it->FileName, FILE_ACTION_REMOVED );
 				it = pending.erase( it );
 			} else {
@@ -279,9 +279,9 @@ void CALLBACK WatchCallback( DWORD dwNumberOfBytesTransfered, LPOVERLAPPED lpOve
 
 	if ( dwNumberOfBytesTransfered == 0 ) {
 		if ( nullptr != pWatch && !pWatch->StopNow ) {
-			/// Missed file actions due to buffer overflowed
-			pWatch->PendingRenames.clear();
-			pWatch->PendingRemovals.clear();
+			/// Missed file actions due to buffer overflowed, or the read of a deleted directory
+			/// ended. The held deletions happened all the same, and nothing will pair them now.
+			FlushPendingMoves( pWatch, true );
 			std::string dir = pWatch->DirName;
 			FileSystem::dirRemoveSlashAtEnd( dir );
 			pWatch->Listener->handleMissedFileActions( pWatch->ID, dir );
