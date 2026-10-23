@@ -1,5 +1,7 @@
 #include "test_util.hpp"
 #include "utest.h"
+#include <algorithm>
+#include <efsw/base.hpp>
 
 using namespace efsw_test;
 
@@ -82,3 +84,50 @@ UTEST( Modified, AppendToFile ) {
 	fileWatcher.removeWatch( testDir );
 	removeDirectory( testDir );
 }
+
+#if EFSW_PLATFORM == EFSW_PLATFORM_INOTIFY
+// Setting only the modification time of a directory, as tar does after extracting into it, sends
+// IN_MODIFY without a name to the directory's own watch, and with its name to its parent's watch.
+UTEST( Modified, DirectoryTimesAreReportedInTheirParent ) {
+	if ( useGeneric )
+		return;
+
+	const std::filesystem::path testDir( getTemporaryDirectory() );
+	EXPECT_TRUE( createDirectory( testDir.string() ) );
+
+	std::vector<std::string> names;
+	for ( int i = 0; i < 32; i++ ) {
+		names.push_back( "d" + std::to_string( i ) );
+		EXPECT_TRUE( createDirectory( ( testDir / names.back() ).string() ) );
+	}
+
+	PathTestListener listener;
+	efsw::FileWatcher fileWatcher( useGeneric, 100 );
+
+	efsw::WatchID watchId = fileWatcher.addWatch( testDir.string(), &listener, true );
+	EXPECT_TRUE( watchId > 0 );
+
+	fileWatcher.watch();
+	sleepMs( 100 );
+
+	const auto time = std::filesystem::file_time_type::clock::now() - std::chrono::hours( 24 );
+	for ( const std::string& name : names )
+		std::filesystem::last_write_time( testDir / name, time );
+	std::filesystem::last_write_time( testDir, time );
+
+	for ( const std::string& name : names )
+		EXPECT_TRUE( listener.waitForEvent( efsw::Actions::Modified, testDir / name ) );
+	sleepMs( 200 );
+
+	// The bytes after a nameless event belong to the next one and must not be read as a name.
+	for ( const auto& event : listener.getEvents() ) {
+		const bool known =
+			event.path.parent_path() == testDir.lexically_normal() &&
+			std::find( names.begin(), names.end(), event.path.filename().string() ) != names.end();
+		EXPECT_TRUE_MSG( known, event.path.string().c_str() );
+	}
+
+	fileWatcher.removeWatch( watchId );
+	removeDirectory( testDir.string() );
+}
+#endif

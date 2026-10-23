@@ -72,6 +72,54 @@ class TestListener : public efsw::FileWatchListener {
 	}
 };
 
+/// Records every event with the path it was reported for.
+class PathTestListener : public efsw::FileWatchListener {
+  public:
+	struct Event {
+		efsw::Action action;
+		std::filesystem::path path;
+	};
+
+	void handleFileAction( efsw::WatchID, const std::string& dir, const std::string& filename,
+						   efsw::Action action, const std::string& = "" ) override {
+		std::lock_guard<std::mutex> lock( mtx );
+		events.push_back(
+			Event{ action, ( std::filesystem::path( dir ) / filename ).lexically_normal() } );
+		cv.notify_all();
+	}
+
+	std::vector<Event> getEvents() {
+		std::lock_guard<std::mutex> lock( mtx );
+		return events;
+	}
+
+	bool hasEvent( efsw::Action action, const std::filesystem::path& path ) {
+		std::lock_guard<std::mutex> lock( mtx );
+		return containsEvent( action, path.lexically_normal() );
+	}
+
+	bool waitForEvent( efsw::Action action, const std::filesystem::path& path,
+					   int timeoutMs = 2000 ) {
+		const std::filesystem::path expected( path.lexically_normal() );
+		std::unique_lock<std::mutex> lock( mtx );
+		return cv.wait_for( lock, std::chrono::milliseconds( timeoutMs ),
+							[&] { return containsEvent( action, expected ); } );
+	}
+
+  private:
+	std::mutex mtx;
+	std::condition_variable cv;
+	std::vector<Event> events;
+
+	bool containsEvent( efsw::Action action, const std::filesystem::path& path ) const {
+		for ( const Event& event : events ) {
+			if ( event.action == action && event.path == path )
+				return true;
+		}
+		return false;
+	}
+};
+
 inline std::string getTemporaryDirectory() {
 #if defined( _WIN32 )
 	const auto processId = _getpid();

@@ -405,8 +405,11 @@ void FileWatcherInotify::run() {
 
 				while ( i < len ) {
 					struct inotify_event* pevent = (struct inotify_event*)&buff[i];
-					events.push_back( BatchEvent{ pevent->wd, pevent->mask, pevent->cookie,
-												  std::string( (char*)pevent->name ) } );
+					// An event about the watched directory itself has no name, len is 0 and the
+					// bytes after it belong to the next event.
+					events.push_back( BatchEvent{
+						pevent->wd, pevent->mask, pevent->cookie,
+						std::string( pevent->name, strnlen( pevent->name, pevent->len ) ) } );
 
 					if ( pevent->mask & IN_MOVED_TO )
 						movePairs[pevent->cookie].destinationWd = pevent->wd;
@@ -546,6 +549,16 @@ void FileWatcherInotify::handleAction( Watcher* watch, const std::string& filena
 
 	if ( IN_Q_OVERFLOW & action ) {
 		watch->Listener->handleMissedFileActions( watch->ID, watch->Directory );
+	} else if ( filename.empty() ) {
+		// A change of the watched directory itself, reported in its parent like the other backends
+		// do. A watch root has no parent inside the watch.
+		if ( ( IN_MODIFY & action ) && NULL != static_cast<WatcherInotify*>( watch )->Parent ) {
+			std::string directory( watch->Directory );
+			FileSystem::dirRemoveSlashAtEnd( directory );
+			watch->Listener->handleFileAction(
+				watch->ID, FileSystem::pathRemoveFileName( directory ),
+				FileSystem::fileNameFromPath( directory ), Actions::Modified );
+		}
 	} else if ( ( IN_CLOSE_WRITE & action ) || ( IN_MODIFY & action ) ) {
 		watch->Listener->handleFileAction( watch->ID, watch->Directory, filename,
 										   Actions::Modified );
