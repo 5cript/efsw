@@ -268,6 +268,21 @@ void FlushPendingMoves( WatcherWin32* pWatch, bool all ) {
 	flush( pWatch->PendingRemovals );
 }
 
+static void ReportMissedFileActions( WatcherWin32* pWatch ) {
+	std::string dir = pWatch->DirName;
+	FileSystem::dirRemoveSlashAtEnd( dir );
+	pWatch->Listener->handleMissedFileActions( pWatch->ID, dir );
+}
+
+/// Closes the directory of a watch that can read no more, so that it does not keep the deleted
+/// directory pending deletion.
+static void ReleaseDirectory( WatcherWin32* pWatch ) {
+	if ( pWatch->DirHandle != INVALID_HANDLE_VALUE ) {
+		CloseHandle( pWatch->DirHandle );
+		pWatch->DirHandle = INVALID_HANDLE_VALUE;
+	}
+}
+
 /// Unpacks events and passes them to a user defined callback.
 void CALLBACK WatchCallback( DWORD dwNumberOfBytesTransfered, LPOVERLAPPED lpOverlapped ) {
 	if ( NULL == lpOverlapped ) {
@@ -281,11 +296,10 @@ void CALLBACK WatchCallback( DWORD dwNumberOfBytesTransfered, LPOVERLAPPED lpOve
 		if ( nullptr != pWatch && !pWatch->StopNow ) {
 			/// Missed file actions due to buffer overflowed, or the read of a deleted directory
 			/// ended. The held deletions happened all the same, and nothing will pair them now.
-			RefreshWatch( tWatch );
+			if ( RefreshResult::Failed == RefreshWatch( tWatch ) )
+				ReleaseDirectory( pWatch );
 			FlushPendingMoves( pWatch, true );
-			std::string dir = pWatch->DirName;
-			FileSystem::dirRemoveSlashAtEnd( dir );
-			pWatch->Listener->handleMissedFileActions( pWatch->ID, dir );
+			ReportMissedFileActions( pWatch );
 		} else if ( nullptr != pWatch ) {
 			pWatch->ReadPending = false;
 		}
@@ -309,6 +323,13 @@ void CALLBACK WatchCallback( DWORD dwNumberOfBytesTransfered, LPOVERLAPPED lpOve
 		WatchCallbackEx( pWatch );
 	} else {
 		WatchCallbackOld( pWatch );
+	}
+
+	if ( !pWatch->StopNow && !pWatch->ReadPending ) {
+		// The directory refused the next read, it is deleted: the changes since this read are lost.
+		FlushPendingMoves( pWatch, true );
+		ReportMissedFileActions( pWatch );
+		ReleaseDirectory( pWatch );
 	}
 }
 

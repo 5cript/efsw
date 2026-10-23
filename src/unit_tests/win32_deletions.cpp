@@ -7,6 +7,7 @@
 
 #include "test_util.hpp"
 #include "utest.h"
+#include <algorithm>
 
 using namespace efsw_test;
 
@@ -26,6 +27,17 @@ bool removeWithoutPosixSemantics( const std::filesystem::path& path ) {
 													sizeof( disposition ) ) != 0;
 	CloseHandle( handle );
 	return marked;
+}
+
+// Deletes a tree deepest entry first, like libc++'s remove_all.
+bool removeTreeWithoutPosixSemantics( const std::filesystem::path& path ) {
+	if ( std::filesystem::is_directory( std::filesystem::symlink_status( path ) ) ) {
+		for ( const auto& entry : std::filesystem::directory_iterator( path ) ) {
+			if ( !removeTreeWithoutPosixSemantics( entry.path() ) )
+				return false;
+		}
+	}
+	return removeWithoutPosixSemantics( path );
 }
 
 std::vector<efsw::WatcherOption> crossDirectoryMoves() {
@@ -120,6 +132,73 @@ UTEST( Win32Deletions, AHeldDeletionComesBeforeItsPathIsBack ) {
 
 	fileWatcher.removeWatch( watchId );
 	removeDirectory( testDir.string() );
+}
+
+// The watched directory deleted entry by entry stays pending deletion while the watch holds it,
+// and its read ends. Windows drops what changed since the last completed read then.
+UTEST( Win32Deletions, AWatchedDirectoryDeletedEntryByEntryIsToldAndLetGo ) {
+	if ( useGeneric )
+		return;
+
+	for ( const bool pairMoves : { false, true } ) {
+		const std::filesystem::path testDir( getTemporaryDirectory() );
+		const std::filesystem::path watched( testDir / "watched" );
+		ASSERT_TRUE( createDirectory( testDir.string() ) );
+		ASSERT_TRUE( createDirectory( watched.string() ) );
+		ASSERT_TRUE( createDirectory( ( watched / "sub" ).string() ) );
+		ASSERT_TRUE( createDirectory( ( watched / "sub" / "deeper" ).string() ) );
+		const std::vector<std::filesystem::path> entries = {
+			watched / "a.txt",
+			watched / "e.txt",
+			watched / "sub",
+			watched / "sub" / "b.txt",
+			watched / "sub" / "c.txt",
+			watched / "sub" / "deeper",
+			watched / "sub" / "deeper" / "d.txt",
+		};
+		for ( const auto& entry : entries ) {
+			if ( !std::filesystem::exists( entry ) )
+				EXPECT_TRUE( createFileFs( entry, entry.filename().string() ) );
+		}
+
+		PathTestListener listener;
+		listener.delay = std::chrono::milliseconds( 2 );
+		efsw::FileWatcher fileWatcher( useGeneric, 100 );
+
+		efsw::WatchID watchId = fileWatcher.addWatch(
+			watched.string(), &listener, true,
+			pairMoves ? crossDirectoryMoves() : std::vector<efsw::WatcherOption>() );
+		EXPECT_TRUE( watchId > 0 );
+
+		fileWatcher.watch();
+		sleepMs( 100 );
+
+		EXPECT_TRUE( removeTreeWithoutPosixSemantics( watched ) );
+
+		// Every deletion arrives, or the listener is told that it missed some.
+		bool told = false;
+		for ( int i = 0; i < 300 && !told; i++ ) {
+			told = listener.hasMissedFileActions() ||
+				   std::all_of( entries.begin(), entries.end(), [&]( const auto& entry ) {
+					   return listener.hasEvent( efsw::Actions::Delete, entry );
+				   } );
+			if ( !told )
+				sleepMs( 10 );
+		}
+		EXPECT_TRUE( told );
+
+		// The watch lets the deleted directory go, it can be created again.
+		bool createdAgain = false;
+		for ( int i = 0; i < 300 && !createdAgain; i++ ) {
+			createdAgain = CreateDirectoryW( watched.c_str(), NULL ) != 0;
+			if ( !createdAgain )
+				sleepMs( 10 );
+		}
+		EXPECT_TRUE( createdAgain );
+
+		fileWatcher.removeWatch( watchId );
+		removeDirectory( testDir.string() );
+	}
 }
 
 #endif

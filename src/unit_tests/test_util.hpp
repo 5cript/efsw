@@ -80,17 +80,32 @@ class PathTestListener : public efsw::FileWatchListener {
 		std::filesystem::path path;
 	};
 
+	/// How long each event keeps the watch's thread busy, like a listener with work to do.
+	std::chrono::milliseconds delay{ 0 };
+
 	void handleFileAction( efsw::WatchID, const std::string& dir, const std::string& filename,
 						   efsw::Action action, const std::string& = "" ) override {
+		std::this_thread::sleep_for( delay );
 		std::lock_guard<std::mutex> lock( mtx );
 		events.push_back(
 			Event{ action, ( std::filesystem::path( dir ) / filename ).lexically_normal() } );
 		cv.notify_all();
 	}
 
+	void handleMissedFileActions( efsw::WatchID, const std::string& ) override {
+		std::lock_guard<std::mutex> lock( mtx );
+		missedFileActions = true;
+		cv.notify_all();
+	}
+
 	std::vector<Event> getEvents() {
 		std::lock_guard<std::mutex> lock( mtx );
 		return events;
+	}
+
+	bool hasMissedFileActions() {
+		std::lock_guard<std::mutex> lock( mtx );
+		return missedFileActions;
 	}
 
 	bool hasEvent( efsw::Action action, const std::filesystem::path& path ) {
@@ -110,6 +125,7 @@ class PathTestListener : public efsw::FileWatchListener {
 	std::mutex mtx;
 	std::condition_variable cv;
 	std::vector<Event> events;
+	bool missedFileActions = false;
 
 	bool containsEvent( efsw::Action action, const std::filesystem::path& path ) const {
 		for ( const Event& event : events ) {
