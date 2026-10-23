@@ -99,6 +99,13 @@ void WatchCallbackOld( WatcherWin32* pWatch ) {
 	} while ( pNotify->NextEntryOffset != 0 );
 }
 
+static void ReportPendingRemovals( WatcherWin32* pWatch ) {
+	std::vector<PendingRenameWin32> pending;
+	pending.swap( pWatch->PendingRemovals );
+	for ( const PendingRenameWin32& removal : pending )
+		pWatch->Watch->handleAction( pWatch, removal.FileName, FILE_ACTION_REMOVED );
+}
+
 void WatchCallbackEx( WatcherWin32* pWatch ) {
 	pWatch->ExtendedEvents.clear();
 	EFSW_PFILE_NOTIFY_EXTENDED_INFORMATION_EX pNotify;
@@ -170,18 +177,11 @@ void WatchCallbackEx( WatcherWin32* pWatch ) {
 					continue;
 				}
 			}
+		}
 
-			if ( matches != 0 ) {
-				for ( auto it = pWatch->PendingRemovals.begin();
-					  it != pWatch->PendingRemovals.end(); ) {
-					if ( it->FileId.QuadPart == event.FileId.QuadPart ) {
-						pWatch->Watch->handleAction( pWatch, it->FileName, FILE_ACTION_REMOVED );
-						it = pWatch->PendingRemovals.erase( it );
-					} else {
-						++it;
-					}
-				}
-			}
+		// An addition can bring back a path that a held deletion is about, which has to come first.
+		if ( FILE_ACTION_ADDED == event.Action || FILE_ACTION_RENAMED_NEW_NAME == event.Action ) {
+			ReportPendingRemovals( pWatch );
 		}
 
 		if ( FILE_ACTION_MODIFIED == event.Action ) {

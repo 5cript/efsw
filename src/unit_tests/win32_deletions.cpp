@@ -70,4 +70,56 @@ UTEST( Win32Deletions, HeldDeletionsArriveWhenTheWatchedDirectoryGoes ) {
 	removeDirectory( testDir.string() );
 }
 
+// A path that comes back right after its deletion, a file replaced by a directory or a file saved
+// over by renaming a new one onto it, is deleted before it is back.
+UTEST( Win32Deletions, AHeldDeletionComesBeforeItsPathIsBack ) {
+	if ( useGeneric )
+		return;
+
+	const std::filesystem::path testDir( getTemporaryDirectory() );
+	ASSERT_TRUE( createDirectory( testDir.string() ) );
+	EXPECT_TRUE( createFileFs( testDir / "replaced", "a file" ) );
+	EXPECT_TRUE( createFileFs( testDir / "saved.txt", "old" ) );
+
+	PathTestListener listener;
+	efsw::FileWatcher fileWatcher( useGeneric, 100 );
+
+	efsw::WatchID watchId =
+		fileWatcher.addWatch( testDir.string(), &listener, true, crossDirectoryMoves() );
+	EXPECT_TRUE( watchId > 0 );
+
+	fileWatcher.watch();
+	sleepMs( 100 );
+
+	EXPECT_TRUE( removeFile( ( testDir / "replaced" ).string() ) );
+	EXPECT_TRUE( createDirectory( ( testDir / "replaced" ).string() ) );
+	EXPECT_TRUE( createFileFs( testDir / "saved.txt.new", "new" ) );
+	EXPECT_TRUE( removeFile( ( testDir / "saved.txt" ).string() ) );
+	EXPECT_TRUE(
+		renameFile( ( testDir / "saved.txt.new" ).string(), ( testDir / "saved.txt" ).string() ) );
+
+	EXPECT_TRUE( listener.waitForEvent( efsw::Actions::Add, testDir / "replaced" ) );
+	EXPECT_TRUE( listener.waitForEvent( efsw::Actions::Moved, testDir / "saved.txt" ) );
+	// Longer than a deletion is held.
+	sleepMs( 300 );
+
+	auto deletedLast = [&]( const std::filesystem::path& path ) {
+		bool deleted = false;
+		for ( const auto& event : listener.getEvents() ) {
+			if ( event.path != path.lexically_normal() )
+				continue;
+			if ( event.action == efsw::Actions::Delete )
+				deleted = true;
+			else if ( event.action == efsw::Actions::Add || event.action == efsw::Actions::Moved )
+				deleted = false;
+		}
+		return deleted;
+	};
+	EXPECT_FALSE( deletedLast( testDir / "replaced" ) );
+	EXPECT_FALSE( deletedLast( testDir / "saved.txt" ) );
+
+	fileWatcher.removeWatch( watchId );
+	removeDirectory( testDir.string() );
+}
+
 #endif
