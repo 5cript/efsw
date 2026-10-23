@@ -48,6 +48,8 @@ class FileWatcherWin32 : public FileWatcherImpl {
 	HANDLE mIOCP;
 	Watches mWatches;
 	Watches mRetiredWatches;
+	/// The watch whose changes the listener is told, freed only after that when removed meanwhile
+	WatcherStructWin32* mWatchInCallback;
 
 	/// The last watchid
 	WatchID mLastWatchID;

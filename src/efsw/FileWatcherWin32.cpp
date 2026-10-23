@@ -9,7 +9,7 @@
 namespace efsw {
 
 FileWatcherWin32::FileWatcherWin32( FileWatcher* parent ) :
-	FileWatcherImpl( parent ), mLastWatchID( 0 ), mThread( NULL ) {
+	FileWatcherImpl( parent ), mWatchInCallback( NULL ), mLastWatchID( 0 ), mThread( NULL ) {
 	mIOCP = CreateIoCompletionPort( INVALID_HANDLE_VALUE, NULL, 0, 1 );
 	if ( mIOCP && mIOCP != INVALID_HANDLE_VALUE )
 		mInitOK = true;
@@ -122,7 +122,7 @@ void FileWatcherWin32::removeWatch( WatcherStructWin32* watch ) {
 }
 
 void FileWatcherWin32::retireWatch( WatcherStructWin32* watch ) {
-	if ( watch->Watch->ReadPending ) {
+	if ( watch->Watch->ReadPending || watch == mWatchInCallback ) {
 		mRetiredWatches.insert( watch );
 	} else {
 		DestroyWatch( watch );
@@ -196,8 +196,10 @@ void FileWatcherWin32::run() {
 					DestroyWatch( *retired );
 					mRetiredWatches.erase( retired );
 				} else if ( mWatches.find( (WatcherStructWin32*)ov ) != mWatches.end() ) {
+					mWatchInCallback = (WatcherStructWin32*)ov;
 					WatchCallback( numOfBytes, ov );
 					FlushPendingMoves( ( (WatcherStructWin32*)ov )->Watch );
+					mWatchInCallback = NULL;
 
 					// A listener that removed the watch during the callback left it retired
 					// without a read in flight.

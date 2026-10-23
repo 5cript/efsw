@@ -66,7 +66,7 @@ void WatchCallbackOld( WatcherWin32* pWatch ) {
 	do {
 		bool skip = false;
 
-		pNotify = (PFILE_NOTIFY_INFORMATION)&pWatch->Buffer[offset];
+		pNotify = (PFILE_NOTIFY_INFORMATION)&pWatch->CompletedBuffer[offset];
 		offset += pNotify->NextEntryOffset;
 		int count =
 			WideCharToMultiByte( CP_UTF8, 0, pNotify->FileName,
@@ -111,7 +111,7 @@ void WatchCallbackEx( WatcherWin32* pWatch ) {
 	EFSW_PFILE_NOTIFY_EXTENDED_INFORMATION_EX pNotify;
 	size_t offset = 0;
 	do {
-		pNotify = (EFSW_PFILE_NOTIFY_EXTENDED_INFORMATION_EX)&pWatch->Buffer[offset];
+		pNotify = (EFSW_PFILE_NOTIFY_EXTENDED_INFORMATION_EX)&pWatch->CompletedBuffer[offset];
 		offset += pNotify->NextEntryOffset;
 		int count =
 			WideCharToMultiByte( CP_UTF8, 0, pNotify->FileName,
@@ -281,28 +281,34 @@ void CALLBACK WatchCallback( DWORD dwNumberOfBytesTransfered, LPOVERLAPPED lpOve
 		if ( nullptr != pWatch && !pWatch->StopNow ) {
 			/// Missed file actions due to buffer overflowed, or the read of a deleted directory
 			/// ended. The held deletions happened all the same, and nothing will pair them now.
+			RefreshWatch( tWatch );
 			FlushPendingMoves( pWatch, true );
 			std::string dir = pWatch->DirName;
 			FileSystem::dirRemoveSlashAtEnd( dir );
 			pWatch->Listener->handleMissedFileActions( pWatch->ID, dir );
-			RefreshWatch( tWatch );
 		} else if ( nullptr != pWatch ) {
 			pWatch->ReadPending = false;
 		}
 		return;
 	}
 
-	// Fork watch depending on the Windows API supported
-	if ( pWatch->Extended ) {
-		WatchCallbackEx( pWatch );
-	} else {
-		WatchCallbackOld( pWatch );
-	}
+	// Read on before the listener is told. What changes meanwhile waits in the buffer of the
+	// directory handle, and the deletion of the watched directory discards it.
+	const bool extended = pWatch->Extended;
+	pWatch->CompletedBuffer.assign( pWatch->Buffer.begin(),
+									pWatch->Buffer.begin() + dwNumberOfBytesTransfered );
 
 	if ( !pWatch->StopNow ) {
 		RefreshWatch( tWatch );
 	} else {
 		pWatch->ReadPending = false;
+	}
+
+	// Fork watch depending on the Windows API supported
+	if ( extended ) {
+		WatchCallbackEx( pWatch );
+	} else {
+		WatchCallbackOld( pWatch );
 	}
 }
 

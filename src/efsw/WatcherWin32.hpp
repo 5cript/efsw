@@ -69,6 +69,7 @@ class WatcherWin32 : public Watcher {
 		Struct( NULL ),
 		DirHandle( NULL ),
 		Buffer(),
+		CompletedBuffer(),
 		ExtendedEvents(),
 		lParam( 0 ),
 		NotifyFilter( 0 ),
@@ -84,6 +85,8 @@ class WatcherWin32 : public Watcher {
 	WatcherStructWin32* Struct;
 	HANDLE DirHandle;
 	std::vector<BYTE> Buffer;
+	/// The last completed read, told to the listener while the next read fills Buffer
+	std::vector<BYTE> CompletedBuffer;
 	std::vector<ExtendedEventWin32> ExtendedEvents;
 	LPARAM lParam;
 	DWORD NotifyFilter;
