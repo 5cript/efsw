@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <chrono>
 #include <efsw/FileWatcherInotify.hpp>
 #include <utility>
 
@@ -319,6 +320,13 @@ void FileWatcherInotify::run() {
 	// coalesce pairs fully contained in this batch. Retaining a source across
 	// reads would require retaining every newer event too; otherwise a delayed
 	// Delete or Moved could be delivered after an event that invalidated it.
+	//
+	// The kernel queues the two events of one rename one after the other, so a
+	// read can come between them, more likely the busier the machine is. A batch
+	// holding a source without its destination is extended by the following reads
+	// for a short while, as inotify(7) suggests, before the source is reported as
+	// moved outside.
+	const auto movePairWait = std::chrono::milliseconds( 20 );
 	struct BatchEvent {
 		int wd;
 		uint32_t mask;
@@ -385,30 +393,54 @@ void FileWatcherInotify::run() {
 		}
 	};
 
+	// Appends the events of one read to the batch, false when nothing was read.
+	auto readBatch = [&]() {
+		const ssize_t len = read( mFD, buff, BUFF_SIZE );
+		if ( len <= 0 )
+			return false;
+
+		ssize_t i = 0;
+		while ( i < len ) {
+			struct inotify_event* pevent = (struct inotify_event*)&buff[i];
+			// An event about the watched directory itself has no name, len is 0 and the
+			// bytes after it belong to the next event.
+			events.push_back(
+				BatchEvent{ pevent->wd, pevent->mask, pevent->cookie,
+							std::string( pevent->name, strnlen( pevent->name, pevent->len ) ) } );
+
+			if ( pevent->mask & IN_MOVED_TO )
+				movePairs[pevent->cookie].destinationWd = pevent->wd;
+
+			i += sizeof( struct inotify_event ) + pevent->len;
+		}
+		return true;
+	};
+
+	auto hasUnpairedSource = [&]() {
+		return std::any_of( events.begin(), events.end(), [&]( const BatchEvent& event ) {
+			if ( !( event.mask & IN_MOVED_FROM ) )
+				return false;
+			auto pair = movePairs.find( event.cookie );
+			return pair == movePairs.end() || pair->second.destinationWd == -1;
+		} );
+	};
+
 	do {
 		pollfd fd = { mFD, POLLIN, 0 };
 		if ( poll( &fd, 1, 100 ) > 0 && ( fd.revents & POLLIN ) ) {
-			ssize_t len;
+			events.clear();
+			movePairs.clear();
 
-			len = read( mFD, buff, BUFF_SIZE );
-
-			if ( len != -1 ) {
-				events.clear();
-				movePairs.clear();
-				ssize_t i = 0;
-
-				while ( i < len ) {
-					struct inotify_event* pevent = (struct inotify_event*)&buff[i];
-					// An event about the watched directory itself has no name, len is 0 and the
-					// bytes after it belong to the next event.
-					events.push_back( BatchEvent{
-						pevent->wd, pevent->mask, pevent->cookie,
-						std::string( pevent->name, strnlen( pevent->name, pevent->len ) ) } );
-
-					if ( pevent->mask & IN_MOVED_TO )
-						movePairs[pevent->cookie].destinationWd = pevent->wd;
-
-					i += sizeof( struct inotify_event ) + pevent->len;
+			if ( readBatch() ) {
+				const auto deadline = std::chrono::steady_clock::now() + movePairWait;
+				while ( hasUnpairedSource() ) {
+					const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+										  deadline - std::chrono::steady_clock::now() )
+										  .count();
+					pollfd more = { mFD, POLLIN, 0 };
+					if ( left <= 0 || poll( &more, 1, static_cast<int>( left ) ) <= 0 ||
+						 !( more.revents & POLLIN ) || !readBatch() )
+						break;
 				}
 
 				// Replay in kernel queue order. A source is deferred only when the
